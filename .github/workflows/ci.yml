@@ -86,12 +86,6 @@ jobs:
         run: |
           set -euo pipefail
           tag="v${VERSION}"
-          # Map archive basename → formula sha256 (from ledgerful.rb)
-          declare -A pin
-          while IFS= read -r line; do
-            # url line then next non-empty content lines until sha256
-            :
-          done < /dev/null
 
           # Extract (url, sha256) pairs in declaration order by scanning the file
           urls=()
@@ -137,6 +131,49 @@ jobs:
             echo "  match $base"
           done
           echo "All formula sha256 pins match published ${tag} checksums."
+
+      - name: Linux archive layout + binary smoke
+        # Proves formula install() path (ledgerful-*/ledgerful) against a
+        # genuinely-downloaded release archive. Full `brew install` on Apple
+        # Silicon remains a manual external gate (Gatekeeper/quarantine).
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.formula.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          asset="ledgerful-x86_64-unknown-linux-gnu.tar.gz"
+          mkdir -p /tmp/archive
+          gh release download "$tag" \
+            --repo Ryan-AI-Studios/Ledgerful \
+            --pattern "$asset" \
+            --dir /tmp/archive \
+            --clobber
+          # Verify published sidecar still matches the file we will extract
+          want="$(grep -A1 "url \".*${asset}\"" ledgerful.rb | grep sha256 | sed -E 's/.*"([0-9a-f]{64})".*/\1/')"
+          got="$(sha256sum "/tmp/archive/${asset}" | awk '{print $1}')"
+          if [[ "$got" != "$want" ]]; then
+            echo "ERROR: downloaded archive hash mismatch"
+            echo "  formula: $want"
+            echo "  file:    $got"
+            exit 1
+          fi
+          tar -xzf "/tmp/archive/${asset}" -C /tmp/archive
+          binary="$(find /tmp/archive -type f -path '*/ledgerful-*/ledgerful' | head -n1)"
+          if [[ -z "${binary}" ]]; then
+            echo "ERROR: nested ledgerful-*/ledgerful binary not found (formula install path broken)"
+            find /tmp/archive -maxdepth 3 -type f | head -n 50
+            exit 1
+          fi
+          chmod +x "$binary"
+          out="$("$binary" --version)"
+          echo "binary: $binary"
+          echo "version: $out"
+          if [[ "$out" != *"$VERSION"* ]]; then
+            echo "ERROR: --version output does not contain $VERSION: $out"
+            exit 1
+          fi
 
       - name: Require license files
         shell: bash
