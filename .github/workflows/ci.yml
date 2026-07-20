@@ -1,0 +1,189 @@
+# Lightweight formula-tap CI for Ryan-AI-Studios/homebrew-tap.
+# Does not require a full brew install matrix (macOS Apple Silicon smoke is
+# documented for manual / post-release verification). Validates structure
+# that release bump automation depends on.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  formula-guard:
+    name: Formula structure + checksum pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Require root ledgerful.rb (not Formula/)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f ledgerful.rb
+          if [[ -e Formula/ledgerful.rb ]]; then
+            echo "ERROR: Formula/ledgerful.rb must not exist; release bump pushes root ledgerful.rb only"
+            exit 1
+          fi
+          if [[ -d Formula ]]; then
+            echo "ERROR: Formula/ directory is not used by this tap (root formula only)"
+            exit 1
+          fi
+
+      - name: Parse version + sha256 pins
+        id: formula
+        shell: bash
+        run: |
+          set -euo pipefail
+          # version "X.Y.Z"
+          version="$(grep -E '^\s*version "' ledgerful.rb | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-].+)?$ ]]; then
+            echo "ERROR: could not parse version from ledgerful.rb (got: ${version:-empty})"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Parsed version: $version"
+
+          # Collect sha256 lines (must be 64 hex chars each)
+          mapfile -t hashes < <(grep -E '^\s*sha256 "' ledgerful.rb | sed -E 's/.*"([0-9a-f]{64})".*/\1/')
+          if [[ "${#hashes[@]}" -lt 3 ]]; then
+            echo "ERROR: expected ≥3 sha256 pins (arm64 macOS, intel macOS, linux); got ${#hashes[@]}"
+            exit 1
+          fi
+          for h in "${hashes[@]}"; do
+            if [[ ! "$h" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "ERROR: invalid sha256: $h"
+              exit 1
+            fi
+            echo "  ok $h"
+          done
+
+          # Every release URL must match the formula version
+          while IFS= read -r url; do
+            if [[ "$url" != *"/v${version}/"* ]]; then
+              echo "ERROR: url does not match version $version: $url"
+              exit 1
+            fi
+            echo "  url $url"
+          done < <(grep -E '^\s*url "' ledgerful.rb | sed -E 's/.*"([^"]+)".*/\1/')
+
+      - name: Verify published checksum sidecars match formula pins
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.formula.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+
+          # Extract (url, sha256) pairs in declaration order by scanning the file
+          urls=()
+          hashes=()
+          while IFS= read -r line; do
+            if [[ "$line" =~ url\ \"([^\"]+)\" ]]; then
+              urls+=("${BASH_REMATCH[1]}")
+            fi
+            if [[ "$line" =~ sha256\ \"([0-9a-f]{64})\" ]]; then
+              hashes+=("${BASH_REMATCH[1]}")
+            fi
+          done < ledgerful.rb
+
+          if [[ "${#urls[@]}" -ne "${#hashes[@]}" ]]; then
+            echo "ERROR: url count (${#urls[@]}) != sha256 count (${#hashes[@]})"
+            exit 1
+          fi
+
+          mkdir -p /tmp/sha
+          for i in "${!urls[@]}"; do
+            url="${urls[$i]}"
+            want="${hashes[$i]}"
+            base="$(basename "$url")"
+            asset="${base}.sha256"
+            echo "Checking $asset against pin $want"
+            # Download only the published .sha256 sidecar (authoritative)
+            if ! gh release download "$tag" \
+              --repo Ryan-AI-Studios/Ledgerful \
+              --pattern "$asset" \
+              --dir /tmp/sha \
+              --clobber; then
+              echo "ERROR: failed to download $asset for tag $tag"
+              exit 1
+            fi
+            # First field of sha256sum-style file
+            got="$(awk '{print $1; exit}' "/tmp/sha/$asset")"
+            if [[ "$got" != "$want" ]]; then
+              echo "ERROR: formula pin mismatch for $base"
+              echo "  formula: $want"
+              echo "  published: $got"
+              exit 1
+            fi
+            echo "  match $base"
+          done
+          echo "All formula sha256 pins match published ${tag} checksums."
+
+      - name: Linux archive layout + binary smoke
+        # Proves formula install() path (ledgerful-*/ledgerful) against a
+        # genuinely-downloaded release archive. Full `brew install` on Apple
+        # Silicon remains a manual external gate (Gatekeeper/quarantine).
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.formula.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          asset="ledgerful-x86_64-unknown-linux-gnu.tar.gz"
+          mkdir -p /tmp/archive
+          gh release download "$tag" \
+            --repo Ryan-AI-Studios/Ledgerful \
+            --pattern "$asset" \
+            --dir /tmp/archive \
+            --clobber
+          # Verify published sidecar still matches the file we will extract
+          want="$(grep -A1 "url \".*${asset}\"" ledgerful.rb | grep sha256 | sed -E 's/.*"([0-9a-f]{64})".*/\1/')"
+          got="$(sha256sum "/tmp/archive/${asset}" | awk '{print $1}')"
+          if [[ "$got" != "$want" ]]; then
+            echo "ERROR: downloaded archive hash mismatch"
+            echo "  formula: $want"
+            echo "  file:    $got"
+            exit 1
+          fi
+          tar -xzf "/tmp/archive/${asset}" -C /tmp/archive
+          binary="$(find /tmp/archive -type f -path '*/ledgerful-*/ledgerful' | head -n1)"
+          if [[ -z "${binary}" ]]; then
+            echo "ERROR: nested ledgerful-*/ledgerful binary not found (formula install path broken)"
+            find /tmp/archive -maxdepth 3 -type f | head -n 50
+            exit 1
+          fi
+          chmod +x "$binary"
+          out="$("$binary" --version)"
+          echo "binary: $binary"
+          echo "version: $out"
+          if [[ "$out" != *"$VERSION"* ]]; then
+            echo "ERROR: --version output does not contain $VERSION: $out"
+            exit 1
+          fi
+
+      - name: Require license files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f LICENSE
+          test -f COMMERCIAL-EXCEPTION.md
+          test -f README.md
+          # license :cannot_represent is required for PolyForm NC packaging
+          grep -q 'license :cannot_represent' ledgerful.rb
+          # quarantine interim guidance must stay visible
+          grep -q 'xattr -d com.apple.quarantine' ledgerful.rb
+          grep -q 'xattr -d com.apple.quarantine' README.md
