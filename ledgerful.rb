@@ -20,18 +20,18 @@ class Ledgerful < Formula
   on_macos do
     on_arm do
       url "https://github.com/Ryan-AI-Studios/Ledgerful/releases/download/v0.2.3/ledgerful-aarch64-apple-darwin.tar.gz"
-      sha256 "1942dd5ab95de60f072f303caed91927b53882bc20ae89dac13b1b0761178212"
+      sha256 "9d809566cad5096a63239947778dacc9dfcda2961f79b00c9af13c0c261870ba"
     end
     on_intel do
       url "https://github.com/Ryan-AI-Studios/Ledgerful/releases/download/v0.2.3/ledgerful-x86_64-apple-darwin.tar.gz"
-      sha256 "58416c0d08da391e9f1936d9a8bd917086efc880e9d84c7b35ece70e60f4e7c7"
+      sha256 "9eedaad20adad050cc9c9e8b37f4215265a212af404ef1adb9033225388f77d8"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/Ryan-AI-Studios/Ledgerful/releases/download/v0.2.3/ledgerful-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "4f2f8325363245c7c07dbf20700428e1cd51d1e075648427defc4dbd12e64010"
+      sha256 "4f19997e6a8db237201ac0c77d7b6c2a6ec38439cddf1dba309e339ff1a7f48d"
     end
   end
 
