@@ -294,5 +294,5 @@ jobs:
             echo "ERROR: installed binary --version does not contain $VERSION: $out"
             exit 1
           fi
-          brew test ledgerful || true
+          brew test ledgerful
           echo "brew install smoke OK"
