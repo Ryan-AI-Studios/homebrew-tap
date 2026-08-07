@@ -132,10 +132,31 @@ jobs:
           done
           echo "All formula sha256 pins match published ${tag} checksums."
 
-      - name: Linux archive layout + binary smoke
-        # Proves formula install() path (ledgerful-*/ledgerful) against a
-        # genuinely-downloaded release archive. Full `brew install` on Apple
-        # Silicon remains a manual external gate (Gatekeeper/quarantine).
+      - name: Formula install-body contract (source)
+        # C4-style guard on live formula: dual-glob install, no broken Dir[] form.
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! grep -q 'Pathname.glob(buildpath' ledgerful.rb; then
+            echo "ERROR: ledgerful.rb install must use Pathname.glob(buildpath…"
+            exit 1
+          fi
+          if grep -q 'Dir\["ledgerful-' ledgerful.rb; then
+            echo "ERROR: ledgerful.rb must not use Dir[\"ledgerful-…\"] install glob"
+            exit 1
+          fi
+          if command -v ruby >/dev/null 2>&1; then
+            ruby -c ledgerful.rb
+          else
+            echo "WARN: ruby not on PATH; skipped ruby -c"
+          fi
+
+      - name: Linux archive layout + staging + dual-glob smoke
+        # 1) Archive nesting (packaging truth): tar has ledgerful-{target}/ledgerful
+        # 2) B4 staging: sole top-level ledgerful-* dir models brew buildpath
+        # 3) C2: same Pathname.glob dual resolve as formula install() against STAGE
+        # Real `brew install` is job brew-install-smoke (required when Linuxbrew
+        # bootstrap works). Apple Silicon remains a manual external gate.
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -144,6 +165,7 @@ jobs:
           set -euo pipefail
           tag="v${VERSION}"
           asset="ledgerful-x86_64-unknown-linux-gnu.tar.gz"
+          rm -rf /tmp/archive
           mkdir -p /tmp/archive
           gh release download "$tag" \
             --repo Ryan-AI-Studios/Ledgerful \
@@ -160,20 +182,58 @@ jobs:
             exit 1
           fi
           tar -xzf "/tmp/archive/${asset}" -C /tmp/archive
-          binary="$(find /tmp/archive -type f -path '*/ledgerful-*/ledgerful' | head -n1)"
-          if [[ -z "${binary}" ]]; then
-            echo "ERROR: nested ledgerful-*/ledgerful binary not found (formula install path broken)"
+
+          # --- Archive nesting (packaging truth) ---
+          archive_binary="$(find /tmp/archive -type f -path '*/ledgerful-*/ledgerful' | sort | head -n1)"
+          if [[ -z "${archive_binary}" ]]; then
+            echo "ERROR: nested ledgerful-*/ledgerful binary not found in archive"
             find /tmp/archive -maxdepth 3 -type f | head -n 50
             exit 1
           fi
-          chmod +x "$binary"
-          out="$("$binary" --version)"
-          echo "binary: $binary"
-          echo "version: $out"
+          echo "archive nested binary: $archive_binary"
+
+          # --- B4: brew-like staging (exactly one top-level ledgerful-* dir) ---
+          mapfile -t stages < <(find /tmp/archive -maxdepth 1 -mindepth 1 -type d -name 'ledgerful-*' | sort)
+          if [[ "${#stages[@]}" -ne 1 ]]; then
+            echo "ERROR: expected exactly 1 top-level ledgerful-* stage dir, got ${#stages[@]}"
+            find /tmp/archive -maxdepth 2 | head -n 50
+            exit 1
+          fi
+          STAGE="${stages[0]}"
+          echo "STAGE (buildpath model): $STAGE"
+          if [[ ! -f "$STAGE/ledgerful" ]]; then
+            echo "ERROR: staged binary missing at $STAGE/ledgerful"
+            ls -la "$STAGE" || true
+            exit 1
+          fi
+          chmod +x "$STAGE/ledgerful"
+          out="$("$STAGE/ledgerful" --version)"
+          echo "staged version: $out"
           if [[ "$out" != *"$VERSION"* ]]; then
             echo "ERROR: --version output does not contain $VERSION: $out"
             exit 1
           fi
+
+          # --- C2: dual-glob mirror of formula install() against STAGE ---
+          export STAGE
+          ruby -e '
+            require "pathname"
+            stage = Pathname.new(ENV.fetch("STAGE"))
+            binary = Pathname.glob(stage/"ledgerful").first ||
+                     Pathname.glob(stage/"ledgerful-*/ledgerful").first
+            if binary.nil?
+              children = begin
+                Dir.children(stage).sort.join(", ")
+              rescue StandardError
+                "(unreadable)"
+              end
+              abort "ERROR: dual-glob resolve failed under STAGE=#{stage} (children: #{children})"
+            end
+            unless binary.file?
+              abort "ERROR: dual-glob resolved non-file: #{binary}"
+            end
+            puts "resolved: #{binary}"
+          '
 
       - name: Require license files
         shell: bash
@@ -187,3 +247,52 @@ jobs:
           # quarantine interim guidance must stay visible
           grep -q 'xattr -d com.apple.quarantine' ledgerful.rb
           grep -q 'xattr -d com.apple.quarantine' README.md
+
+  # C1: real brew install under Linuxbrew. Required when infra allows; models
+  # Homebrew AbstractDownloadStrategy#chdir + Formula#stage for real. Uses
+  # Homebrew/actions/setup-homebrew. If this job flakes on bootstrap only,
+  # formula-guard (staging + C2) remains the hard install-contract gate.
+  brew-install-smoke:
+    name: brew install smoke (Linuxbrew)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Parse formula version
+        id: formula
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(grep -E '^\s*version "' ledgerful.rb | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-].+)?$ ]]; then
+            echo "ERROR: could not parse version from ledgerful.rb (got: ${version:-empty})"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Homebrew
+        id: set-up-homebrew
+        uses: Homebrew/actions/setup-homebrew@fd832223f9f99ebf0244dd20658680e5d4aca049 # 2026.08.03.2
+
+      - name: Install formula (real brew stage + install)
+        shell: bash
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_FROM_API: "1"
+          VERSION: ${{ steps.formula.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Prebuilt release URL formula — brew downloads tar, stages sole top
+          # dir as buildpath, then runs install(). This is the only CI path that
+          # executes formula Ruby under real Homebrew chdir.
+          brew install --formula ./ledgerful.rb
+          out="$(ledgerful --version)"
+          echo "ledgerful --version: $out"
+          if [[ "$out" != *"$VERSION"* ]]; then
+            echo "ERROR: installed binary --version does not contain $VERSION: $out"
+            exit 1
+          fi
+          brew test ledgerful || true
+          echo "brew install smoke OK"
