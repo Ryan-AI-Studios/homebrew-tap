@@ -284,15 +284,23 @@ jobs:
           VERSION: ${{ steps.formula.outputs.version }}
         run: |
           set -euo pipefail
+          # Homebrew rejects bare ./ledgerful.rb ("must be in a tap"). Seed a
+          # local CI tap with this PR's formula (root layout matches live tap).
           # Prebuilt release URL formula — brew downloads tar, stages sole top
           # dir as buildpath, then runs install(). This is the only CI path that
           # executes formula Ruby under real Homebrew chdir.
-          brew install --formula ./ledgerful.rb
+          brew tap-new --no-git local/ledgerful-ci
+          TAP_DIR="$(brew --repository local/ledgerful-ci)"
+          # tap-new scaffolds Formula/; live tap uses root formula — copy both
+          # so either layout resolves (prefer root for lockstep with live).
+          cp ledgerful.rb "${TAP_DIR}/ledgerful.rb"
+          cp ledgerful.rb "${TAP_DIR}/Formula/ledgerful.rb"
+          brew install --formula local/ledgerful-ci/ledgerful
           out="$(ledgerful --version)"
           echo "ledgerful --version: $out"
           if [[ "$out" != *"$VERSION"* ]]; then
             echo "ERROR: installed binary --version does not contain $VERSION: $out"
             exit 1
           fi
-          brew test ledgerful
+          brew test local/ledgerful-ci/ledgerful
           echo "brew install smoke OK"
