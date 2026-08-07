@@ -280,7 +280,9 @@ jobs:
         shell: bash
         env:
           HOMEBREW_NO_AUTO_UPDATE: "1"
-          HOMEBREW_NO_INSTALL_FROM_API: "1"
+          # Do NOT set HOMEBREW_NO_INSTALL_FROM_API here: with it set, brew
+          # tries to clone homebrew/core and setup-homebrew runners deny that
+          # path. Formula has no brew deps — release URL fetch is enough.
           VERSION: ${{ steps.formula.outputs.version }}
         run: |
           set -euo pipefail
