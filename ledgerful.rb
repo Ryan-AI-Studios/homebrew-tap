@@ -14,24 +14,24 @@
 class Ledgerful < Formula
   desc "Local-first change intelligence CLI for impact analysis and verification"
   homepage "https://github.com/Ryan-AI-Studios/Ledgerful"
-  version "0.2.8"
+  version "0.2.9"
   license :cannot_represent
 
   on_macos do
     on_arm do
-      url "https://github.com/Ryan-AI-Studios/Ledgerful/releases/download/v0.2.8/ledgerful-aarch64-apple-darwin.tar.gz"
-      sha256 "171bc9bb945e5d78c192602955cb69fd67d35ef75f0487f9748f14867f05d034"
+      url "https://github.com/Ryan-AI-Studios/Ledgerful/releases/download/v0.2.9/ledgerful-aarch64-apple-darwin.tar.gz"
+      sha256 "881e3cba949e71763d711bc4e266a4b32f0799e12f1ee481cea48c5501186b37"
     end
     on_intel do
-      url "https://github.com/Ryan-AI-Studios/Ledgerful/releases/download/v0.2.8/ledgerful-x86_64-apple-darwin.tar.gz"
-      sha256 "cd748855a88490c0a09d92ccbdb9fdeaead33ff1e68e13d5314d5d0c01b55521"
+      url "https://github.com/Ryan-AI-Studios/Ledgerful/releases/download/v0.2.9/ledgerful-x86_64-apple-darwin.tar.gz"
+      sha256 "703a25cbcbd33e114a98759faabd360d071b5f5b551d5e26fa1f9163f0ca1830"
     end
   end
 
   on_linux do
     on_intel do
-      url "https://github.com/Ryan-AI-Studios/Ledgerful/releases/download/v0.2.8/ledgerful-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "5f1723534afb3df540f90c3519365bb6a07f38341d2f60d6e6d3dccb1aa1b1ec"
+      url "https://github.com/Ryan-AI-Studios/Ledgerful/releases/download/v0.2.9/ledgerful-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "00dc9cdf64b78def682148f1e3d984dccd7619b36bf6c4eef72b1c34c1b4a265"
     end
   end
 
